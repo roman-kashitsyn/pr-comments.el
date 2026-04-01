@@ -49,7 +49,7 @@ pullRequest(number:$pr){\
 reviewThreads(first:100,after:$cursor){\
 pageInfo{hasNextPage endCursor}\
 nodes{\
-isResolved path line originalLine\
+isResolved path line originalLine \
 comments(first:100){\
 nodes{author{login}body}\
 }\
@@ -77,23 +77,26 @@ Signal `user-error' if not inside a git repository."
   "Run `pr-comments-gh-executable' with ARGS in GIT-ROOT.
 Return stdout as a string on success.
 Signal `user-error' with stderr content on non-zero exit."
-  (let ((stdout-buf (generate-new-buffer " *pr-comments-stdout*"))
-        (stderr-buf (generate-new-buffer " *pr-comments-stderr*")))
+  (let ((stdout-buf  (generate-new-buffer " *pr-comments-stdout*"))
+        (stderr-file (make-temp-file "pr-comments-stderr")))
     (unwind-protect
         (let* ((default-directory git-root)
                (exit-code (apply #'call-process
                                  pr-comments-gh-executable
                                  nil
-                                 (list stdout-buf stderr-buf)
+                                 (list stdout-buf stderr-file)
                                  nil
                                  args)))
           (if (zerop exit-code)
               (with-current-buffer stdout-buf (buffer-string))
-            (let ((err (with-current-buffer stderr-buf (buffer-string))))
+            (let ((err (with-temp-buffer
+                         (insert-file-contents stderr-file)
+                         (buffer-string))))
               (user-error "pr-comments: gh error: %s"
                           (string-trim err)))))
       (kill-buffer stdout-buf)
-      (kill-buffer stderr-buf))))
+      (when (file-exists-p stderr-file)
+        (delete-file stderr-file)))))
 
 ;;;; Phase 2 — PR detection
 
@@ -260,36 +263,58 @@ PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
     (push (format "%s\nPress q to close\n" separator) parts)
     (apply #'concat (nreverse parts))))
 
+(defun pr-comments--thread-for-key (file line)
+  "Return the cached thread for FILE at LINE, or nil."
+  (gethash (format "%s:%d" file line) pr-comments--thread-cache))
+
+(defun pr-comments--thread-at-point ()
+  "Return the thread alist for the current navigation position, or nil.
+Tries the xref buffer item first (works when *xref* is focused), then
+falls back to the current buffer's file and line (works after next-error
+navigates to a source file)."
+  (or
+   ;; Case 1: point is on an xref item in the *xref* buffer
+   (when-let* ((xref-buf (get-buffer "*xref*"))
+               (item     (with-current-buffer xref-buf
+                           (ignore-errors (xref--item-at-point))))
+               (loc      (xref-item-location item)))
+     (pr-comments--thread-for-key (xref-file-location-file loc)
+                                  (xref-file-location-line loc)))
+   ;; Case 2: current buffer is the source file (e.g. after next-error)
+   (when-let* ((file (buffer-file-name))
+               (line (line-number-at-pos nil t)))
+     (pr-comments--thread-for-key file line))))
+
+(defun pr-comments--display-thread (thread)
+  "Render THREAD into the `*PR Comment*' buffer and ensure it is visible."
+  (let ((buf (get-buffer-create "*PR Comment*"))
+        (content (pr-comments--format-body-buffer thread pr-comments--current-pr)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert content))
+      (goto-char (point-min))
+      (view-mode 1)
+      (local-set-key (kbd "q") #'quit-window))
+    (display-buffer buf
+                    '(display-buffer-in-side-window
+                      (side . bottom)
+                      (window-height . 0.35)))))
+
 (defun pr-comments--show-body-at-point ()
   "Show the full comment thread for the xref item at point.
 Displays a `*PR Comment*' buffer in a side window."
   (interactive)
-  (let* ((item (ignore-errors (xref--item-at-point)))
-         (_ (unless item
-              (message "pr-comments: No xref item at point")
-              (cl-return-from pr-comments--show-body-at-point)))
-         (loc  (xref-item-location item))
-         (file (xref-file-location-file loc))
-         (line (xref-file-location-line loc))
-         (key  (format "%s:%d" file line))
-         (thread (gethash key pr-comments--thread-cache)))
-    (unless thread
-      (message "pr-comments: No comment data at point")
-      (cl-return-from pr-comments--show-body-at-point))
-    (let* ((pr-info pr-comments--current-pr)
-           (content (pr-comments--format-body-buffer thread pr-info))
-           (buf (get-buffer-create "*PR Comment*")))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert content))
-        (goto-char (point-min))
-        (view-mode 1)
-        (local-set-key (kbd "q") #'quit-window))
-      (display-buffer buf
-                      '(display-buffer-in-side-window
-                        (side . bottom)
-                        (window-height . 0.35))))))
+  (if-let ((thread (pr-comments--thread-at-point)))
+      (pr-comments--display-thread thread)
+    (message "pr-comments: No comment data at point")))
+
+(defun pr-comments--auto-update-comment ()
+  "Update `*PR Comment*' buffer when it is visible and point is on an xref item.
+Intended as a buffer-local entry in `post-command-hook' for `*xref*'."
+  (when (get-buffer-window "*PR Comment*")
+    (when-let ((thread (pr-comments--thread-at-point)))
+      (pr-comments--display-thread thread))))
 
 ;;;; Phase 5 — Entry point
 
@@ -327,10 +352,19 @@ Press SPC to view the full comment thread in a side window."
           (xref-show-xrefs (lambda () items) nil)
           (run-at-time 0 nil
                        (lambda ()
+                         (add-hook 'next-error-hook #'pr-comments--auto-update-comment)
                          (when-let ((buf (get-buffer "*xref*")))
                            (with-current-buffer buf
                              (local-set-key (kbd "SPC")
-                                            #'pr-comments--show-body-at-point))))))))))
+                                            #'pr-comments--show-body-at-point)
+                             (add-hook 'post-command-hook
+                                       #'pr-comments--auto-update-comment
+                                       nil t)
+                             (add-hook 'kill-buffer-hook
+                                       (lambda ()
+                                         (remove-hook 'next-error-hook
+                                                      #'pr-comments--auto-update-comment))
+                                       nil t))))))))))
 
 (provide 'pr-comments)
 ;;; pr-comments.el ends here
