@@ -17,6 +17,7 @@
 (require 'xref)
 (require 'cl-lib)
 (require 'json)
+(require 'wid-edit)
 
 ;;;; Customization
 
@@ -51,7 +52,7 @@ pageInfo{hasNextPage endCursor}\
 nodes{\
 isResolved path line originalLine \
 comments(first:100){\
-nodes{author{login}body}\
+nodes{author{login}body url}\
 }\
 }\
 }\
@@ -234,8 +235,8 @@ Skips resolved threads and threads without a usable line number."
 
 ;;;; Full comment body feature
 
-(defun pr-comments--format-body-buffer (thread pr-info)
-  "Return a string with the full formatted content for THREAD's comment buffer.
+(defun pr-comments--insert-body (thread pr-info)
+  "Insert THREAD content with clickable links into the current buffer.
 PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
   (let* ((comments  (alist-get 'nodes (alist-get 'comments thread)))
          (path      (alist-get 'path thread))
@@ -243,15 +244,16 @@ PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
          (owner     (plist-get pr-info :owner))
          (repo      (plist-get pr-info :repo))
          (number    (plist-get pr-info :number))
-         (separator (make-string 60 ?─))
-         (parts     (list (format "%s\n" separator)
-                          (format "File: %s  Line: %s\n" path (or line "?"))
-                          (format "PR:   %s/%s#%s\n" owner repo number)
-                          (format "%s\n\n" separator))))
+         (separator (make-string 60 ?─)))
+    (insert (format "%s\n" separator))
+    (insert (format "File: %s  Line: %s\n" path (or line "?")))
+    (insert (format "PR:   %s/%s#%s\n" owner repo number))
+    (insert (format "%s\n\n" separator))
     (dolist (comment comments)
       (let* ((author (or (alist-get 'login (alist-get 'author comment))
                          "unknown"))
              (body   (or (alist-get 'body comment) ""))
+             (url    (alist-get 'url comment))
              (indented (replace-regexp-in-string
                         "^" "  "
                         (with-temp-buffer
@@ -259,9 +261,16 @@ PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
                           (let ((fill-column 72))
                             (fill-region (point-min) (point-max)))
                           (buffer-string)))))
-        (push (format "%s:\n%s\n\n" author indented) parts)))
-    (push (format "%s\nPress q to close\n" separator) parts)
-    (apply #'concat (nreverse parts))))
+        (insert (format "%s:\n%s\n" author indented))
+        (when url
+          (insert "  ")
+          (widget-create 'link
+                         :notify (lambda (&rest _) (browse-url url))
+                         :help-echo url
+                         "View on GitHub")
+          (insert "\n"))
+        (insert "\n")))
+    (insert (format "%s\nPress q to close\n" separator))))
 
 (defun pr-comments--thread-for-key (file line)
   "Return the cached thread for FILE at LINE, or nil."
@@ -287,14 +296,15 @@ navigates to a source file)."
 
 (defun pr-comments--display-thread (thread)
   "Render THREAD into the `*PR Comment*' buffer and ensure it is visible."
-  (let ((buf (get-buffer-create "*PR Comment*"))
-        (content (pr-comments--format-body-buffer thread pr-comments--current-pr)))
+  (let ((buf (get-buffer-create "*PR Comment*")))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert content))
+        (remove-overlays)
+        (pr-comments--insert-body thread pr-comments--current-pr))
+      (widget-setup)
+      (setq buffer-read-only t)
       (goto-char (point-min))
-      (view-mode 1)
       (local-set-key (kbd "q") #'quit-window))
     (display-buffer buf
                     '(display-buffer-in-side-window
