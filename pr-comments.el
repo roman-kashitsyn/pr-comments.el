@@ -41,6 +41,10 @@ Populated by `pr-comments--build-xref-items' and cleared on each
 (defvar pr-comments--current-pr nil
   "Plist (:owner OWNER :repo REPO :number NUMBER) for the current PR.")
 
+(defvar pr-comments--last-git-root nil
+  "Git root used by the most recent `pr-comments' invocation.
+Used by `pr-comments-refresh' to re-run from the xref buffer.")
+
 ;;;; GraphQL query
 
 (defconst pr-comments--graphql-query
@@ -328,53 +332,65 @@ Intended as a buffer-local entry in `post-command-hook' for `*xref*'."
 
 ;;;; Phase 5 — Entry point
 
+(defun pr-comments--fetch-and-display (git-root)
+  "Fetch PR review threads for GIT-ROOT and display them in the *xref* buffer."
+  (message "pr-comments: Detecting PR...")
+  (let* ((pr-info (pr-comments--detect-pr git-root))
+         (owner   (plist-get pr-info :owner))
+         (repo    (plist-get pr-info :repo))
+         (number  (plist-get pr-info :number)))
+    (setq pr-comments--current-pr  pr-info
+          pr-comments--last-git-root git-root)
+    (message "pr-comments: Fetching threads for %s/%s#%s..." owner repo number)
+    (let* ((threads (pr-comments--fetch-all-threads git-root owner repo number))
+           (items   (pr-comments--build-xref-items threads git-root))
+           (n       (length items))
+           (replied (cl-count-if
+                     (lambda (item)
+                       (let* ((loc (xref-item-location item))
+                              (key (format "%s:%d"
+                                           (xref-file-location-file loc)
+                                           (xref-file-location-line loc))))
+                         (when-let ((th (gethash key pr-comments--thread-cache)))
+                           (pr-comments--answered-p th))))
+                     items)))
+      (if (zerop n)
+          (message "pr-comments: No unresolved review threads.")
+        (message "pr-comments: Found %d unresolved thread(s) (%d replied)."
+                 n replied)
+        (xref-show-xrefs (lambda () items) nil)
+        (run-at-time 0 nil
+                     (lambda ()
+                       (add-hook 'next-error-hook #'pr-comments--auto-update-comment)
+                       (when-let ((buf (get-buffer "*xref*")))
+                         (with-current-buffer buf
+                           (local-set-key (kbd "g")   #'pr-comments-refresh)
+                           (local-set-key (kbd "SPC") #'pr-comments--show-body-at-point)
+                           (add-hook 'post-command-hook
+                                     #'pr-comments--auto-update-comment
+                                     nil t)
+                           (add-hook 'kill-buffer-hook
+                                     (lambda ()
+                                       (remove-hook 'next-error-hook
+                                                    #'pr-comments--auto-update-comment))
+                                     nil t)))))))))
+
+(defun pr-comments-refresh ()
+  "Re-fetch PR review threads and refresh the *xref* buffer."
+  (interactive)
+  (unless pr-comments--last-git-root
+    (user-error "pr-comments: No previous run to refresh"))
+  (pr-comments--fetch-and-display pr-comments--last-git-root))
+
 ;;;###autoload
 (defun pr-comments ()
   "List unresolved GitHub PR review threads in the *xref* buffer.
 Threads with replies are shown with a [replied] prefix.
 Press RET or click to jump to the file and line of a comment.
+Press g to refresh.
 Press SPC to view the full comment thread in a side window."
   (interactive)
-  (let* ((git-root (pr-comments--git-root)))
-    (message "pr-comments: Detecting PR...")
-    (let* ((pr-info (pr-comments--detect-pr git-root))
-           (owner   (plist-get pr-info :owner))
-           (repo    (plist-get pr-info :repo))
-           (number  (plist-get pr-info :number)))
-      (setq pr-comments--current-pr pr-info)
-      (message "pr-comments: Fetching threads for %s/%s#%s..." owner repo number)
-      (let* ((threads (pr-comments--fetch-all-threads git-root owner repo number))
-             (items   (pr-comments--build-xref-items threads git-root))
-             (n       (length items))
-             (replied (cl-count-if
-                       (lambda (item)
-                         (let* ((loc  (xref-item-location item))
-                                (file (xref-file-location-file loc))
-                                (line (xref-file-location-line loc))
-                                (key  (format "%s:%d" file line))
-                                (th   (gethash key pr-comments--thread-cache)))
-                           (and th (pr-comments--answered-p th))))
-                       items)))
-        (if (zerop n)
-            (message "pr-comments: No unresolved review threads.")
-          (message "pr-comments: Found %d unresolved thread(s) (%d replied)."
-                   n replied)
-          (xref-show-xrefs (lambda () items) nil)
-          (run-at-time 0 nil
-                       (lambda ()
-                         (add-hook 'next-error-hook #'pr-comments--auto-update-comment)
-                         (when-let ((buf (get-buffer "*xref*")))
-                           (with-current-buffer buf
-                             (local-set-key (kbd "SPC")
-                                            #'pr-comments--show-body-at-point)
-                             (add-hook 'post-command-hook
-                                       #'pr-comments--auto-update-comment
-                                       nil t)
-                             (add-hook 'kill-buffer-hook
-                                       (lambda ()
-                                         (remove-hook 'next-error-hook
-                                                      #'pr-comments--auto-update-comment))
-                                       nil t))))))))))
+  (pr-comments--fetch-and-display (pr-comments--git-root)))
 
 (provide 'pr-comments)
 ;;; pr-comments.el ends here
