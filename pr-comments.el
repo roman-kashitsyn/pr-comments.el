@@ -6,7 +6,7 @@
 ;; Keywords: tools, vc
 
 ;;; Commentary:
-;; Lists all unresolved GitHub PR review threads in the standard *xref* buffer.
+;; Lists all unresolved GitHub PR review threads in the standard *pr-comments* buffer.
 ;; Threads with replies appear with a [replied] indicator.
 ;; Requires the `gh' CLI to be authenticated.
 ;;
@@ -282,12 +282,12 @@ PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
 
 (defun pr-comments--thread-at-point ()
   "Return the thread alist for the current navigation position, or nil.
-Tries the xref buffer item first (works when *xref* is focused), then
+Tries the xref buffer item first (works when *pr-comments* is focused), then
 falls back to the current buffer's file and line (works after next-error
 navigates to a source file)."
   (or
-   ;; Case 1: point is on an xref item in the *xref* buffer
-   (when-let* ((xref-buf (get-buffer "*xref*"))
+   ;; Case 1: point is on an xref item in the *pr-comments* buffer
+   (when-let* ((xref-buf (get-buffer "*pr-comments*"))
                (item     (with-current-buffer xref-buf
                            (ignore-errors (xref--item-at-point))))
                (loc      (xref-item-location item)))
@@ -325,7 +325,7 @@ Displays a `*PR Comment*' buffer in a side window."
 
 (defun pr-comments--auto-update-comment ()
   "Update `*PR Comment*' buffer when it is visible and point is on an xref item.
-Intended as a buffer-local entry in `post-command-hook' for `*xref*'."
+Intended as a buffer-local entry in `post-command-hook' for `*pr-comments*'."
   (when (get-buffer-window "*PR Comment*")
     (when-let ((thread (pr-comments--thread-at-point)))
       (pr-comments--display-thread thread))))
@@ -333,7 +333,7 @@ Intended as a buffer-local entry in `post-command-hook' for `*xref*'."
 ;;;; Phase 5 — Entry point
 
 (defun pr-comments--fetch-and-display (git-root)
-  "Fetch PR review threads for GIT-ROOT and display them in the *xref* buffer."
+  "Fetch PR review threads for GIT-ROOT and display them in the *pr-comments* buffer."
   (message "pr-comments: Detecting PR...")
   (let* ((pr-info (pr-comments--detect-pr git-root))
          (owner   (plist-get pr-info :owner))
@@ -358,11 +358,12 @@ Intended as a buffer-local entry in `post-command-hook' for `*xref*'."
           (message "pr-comments: No unresolved review threads.")
         (message "pr-comments: Found %d unresolved thread(s) (%d replied)."
                  n replied)
-        (xref-show-xrefs (lambda () items) nil)
+        (let ((xref-buffer-name "*pr-comments*"))
+          (xref-show-xrefs (lambda () items) nil))
         (run-at-time 0 nil
                      (lambda ()
                        (add-hook 'next-error-hook #'pr-comments--auto-update-comment)
-                       (when-let ((buf (get-buffer "*xref*")))
+                       (when-let ((buf (get-buffer "*pr-comments*")))
                          (with-current-buffer buf
                            (local-set-key (kbd "g")   #'pr-comments-refresh)
                            (local-set-key (kbd "SPC") #'pr-comments--show-body-at-point)
@@ -376,7 +377,7 @@ Intended as a buffer-local entry in `post-command-hook' for `*xref*'."
                                      nil t)))))))))
 
 (defun pr-comments-refresh ()
-  "Re-fetch PR review threads and refresh the *xref* buffer."
+  "Re-fetch PR review threads and refresh the *pr-comments* buffer."
   (interactive)
   (unless pr-comments--last-git-root
     (user-error "pr-comments: No previous run to refresh"))
@@ -384,7 +385,7 @@ Intended as a buffer-local entry in `post-command-hook' for `*xref*'."
 
 ;;;###autoload
 (defun pr-comments ()
-  "List unresolved GitHub PR review threads in the *xref* buffer.
+  "List unresolved GitHub PR review threads in the *pr-comments* buffer.
 Threads with replies are shown with a [replied] prefix.
 Press RET or click to jump to the file and line of a comment.
 Press g to refresh.
