@@ -54,7 +54,7 @@ pullRequest(number:$pr){\
 reviewThreads(first:100,after:$cursor){\
 pageInfo{hasNextPage endCursor}\
 nodes{\
-isResolved path line originalLine \
+id isResolved path line originalLine \
 comments(first:100){\
 nodes{author{login}body url}\
 }\
@@ -109,7 +109,7 @@ Signal `user-error' with stderr content on non-zero exit."
   "Detect the PR for the current branch in GIT-ROOT.
 Return a plist (:owner OWNER :repo REPO :number NUMBER).
 Signal `user-error' if no PR exists for the current branch."
-  (let* ((json-str (pr-comments--run-gh git-root "pr" "view" "--json" "url,number"))
+  (let* ((json-str (pr-comments--run-gh git-root "pr" "view" "--json" "url,number,id"))
          (data (with-temp-buffer
                  (insert json-str)
                  (goto-char (point-min))
@@ -118,7 +118,8 @@ Signal `user-error' if no PR exists for the current branch."
                                     :null-object nil
                                     :false-object nil)))
          (number (alist-get 'number data))
-         (url    (alist-get 'url data)))
+         (url    (alist-get 'url data))
+         (id     (alist-get 'id data)))
     (unless (and number url)
       (user-error "pr-comments: Could not parse PR info from gh output"))
     (unless (string-match
@@ -127,7 +128,8 @@ Signal `user-error' if no PR exists for the current branch."
       (user-error "pr-comments: Unexpected PR URL format: %s" url))
     (list :owner  (match-string 1 url)
           :repo   (match-string 2 url)
-          :number number)))
+          :number number
+          :id     id)))
 
 ;;;; Phase 3 — GitHub GraphQL API
 
@@ -274,7 +276,12 @@ PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
                          "View on GitHub")
           (insert "\n"))
         (insert "\n")))
-    (insert (format "%s\nPress q to close\n" separator))))
+    (insert (format "%s\n" separator))
+    (widget-create 'link
+                   :notify (lambda (&rest _) (pr-comments--open-reply-for-thread thread))
+                   :help-echo "Reply to this thread"
+                   "Reply")
+    (insert (format "  Press q to close\n" ))))
 
 (defun pr-comments--thread-for-key (file line)
   "Return the cached thread for FILE at LINE, or nil."
@@ -330,6 +337,142 @@ Intended as a buffer-local entry in `post-command-hook' for `*pr-comments*'."
     (when-let ((thread (pr-comments--thread-at-point)))
       (pr-comments--display-thread thread))))
 
+;;;; Reply feature
+
+(defconst pr-comments--reply-mutation
+  "mutation($threadId:ID!,$reviewId:ID!,$body:String!){\
+addPullRequestReviewThreadReply(input:{\
+pullRequestReviewThreadId:$threadId,\
+pullRequestReviewId:$reviewId,\
+body:$body}){\
+comment{id}\
+}\
+}"
+  "GraphQL mutation to post a reply to a review thread as a pending comment.")
+
+(defconst pr-comments--pending-review-query
+  "query($prId:ID!){\
+node(id:$prId){\
+...on PullRequest{\
+reviews(first:1,states:[PENDING]){nodes{id}}\
+}\
+}\
+}"
+  "GraphQL query to find an existing pending review for the viewer.")
+
+(defconst pr-comments--create-pending-review-mutation
+  "mutation($prId:ID!){\
+addPullRequestReview(input:{pullRequestId:$prId,event:PENDING}){\
+pullRequestReview{id}\
+}\
+}"
+  "GraphQL mutation to create a new pending review.")
+
+(defvar-local pr-comments--reply-thread-id nil
+  "Thread node ID stored in the *PR Reply* compose buffer.")
+
+(defvar-local pr-comments--reply-git-root nil
+  "Git root stored in the *PR Reply* compose buffer.")
+
+(defun pr-comments--get-or-create-pending-review (git-root pr-node-id)
+  "Return the node ID of the viewer's pending review on PR-NODE-ID.
+Queries for an existing pending review first; creates one if none exists."
+  (let* ((json-str (pr-comments--run-gh git-root "api" "graphql"
+                                        "-f" (format "prId=%s" pr-node-id)
+                                        "-f" (format "query=%s"
+                                                     pr-comments--pending-review-query)))
+         (data (with-temp-buffer
+                 (insert json-str)
+                 (goto-char (point-min))
+                 (json-parse-buffer :object-type 'alist :array-type 'list
+                                    :null-object nil :false-object nil)))
+         (nodes (alist-get 'nodes
+                           (alist-get 'reviews
+                                      (alist-get 'node
+                                                 (alist-get 'data data))))))
+    (if nodes
+        (alist-get 'id (car nodes))
+      (let* ((json-str (pr-comments--run-gh
+                        git-root "api" "graphql"
+                        "-f" (format "prId=%s" pr-node-id)
+                        "-f" (format "query=%s"
+                                     pr-comments--create-pending-review-mutation)))
+             (data (with-temp-buffer
+                     (insert json-str)
+                     (goto-char (point-min))
+                     (json-parse-buffer :object-type 'alist :array-type 'list
+                                        :null-object nil :false-object nil))))
+        (alist-get 'id
+                   (alist-get 'pullRequestReview
+                              (alist-get 'addPullRequestReview
+                                         (alist-get 'data data))))))))
+
+(defun pr-comments--submit-reply ()
+  "Submit the reply composed in the current buffer as a pending comment."
+  (interactive)
+  (let ((body (string-trim
+               (replace-regexp-in-string "^#[^\n]*\n?" "" (buffer-string)))))
+    (when (string-empty-p body)
+      (user-error "pr-comments: Reply body is empty"))
+    (let* ((thread-id (prog1 pr-comments--reply-thread-id
+                        (unless pr-comments--reply-thread-id
+                          (user-error "pr-comments: No thread ID in buffer"))))
+           (git-root  pr-comments--reply-git-root)
+           (pr-id     (plist-get pr-comments--current-pr :id))
+           (review-id (pr-comments--get-or-create-pending-review git-root pr-id)))
+      (pr-comments--run-gh git-root
+                           "api" "graphql"
+                           "-f" (format "threadId=%s" thread-id)
+                           "-f" (format "reviewId=%s" review-id)
+                           "-f" (format "body=%s" body)
+                           "-f" (format "query=%s" pr-comments--reply-mutation))
+      (quit-window t)
+      (message "pr-comments: Reply added to pending review.")
+      (when pr-comments--last-git-root
+        (pr-comments--fetch-and-display pr-comments--last-git-root)))))
+
+(defun pr-comments--open-reply-for-thread (thread)
+  "Open the *PR Reply* compose buffer for THREAD."
+  (let* ((thread-id (alist-get 'id thread))
+         (path      (alist-get 'path thread))
+         (line      (pr-comments--thread-line thread))
+         (comments  (alist-get 'nodes (alist-get 'comments thread)))
+         (buf       (get-buffer-create "*PR Reply*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (text-mode)
+      (setq pr-comments--reply-thread-id thread-id
+            pr-comments--reply-git-root  pr-comments--last-git-root)
+      (let ((inhibit-read-only t))
+        (insert (propertize
+                 (concat (format "# Replying to thread: %s:%s\n" path (or line "?"))
+                         (format "# %d comment(s) — C-c C-c to send, C-c C-k to cancel\n"
+                                 (length comments))
+                         "#\n"
+                         (mapconcat
+                          (lambda (c)
+                            (let ((author (or (alist-get 'login (alist-get 'author c))
+                                             "unknown"))
+                                  (body   (replace-regexp-in-string
+                                           "^" "#   "
+                                           (or (alist-get 'body c) ""))))
+                              (format "# %s:\n%s\n" author body)))
+                          comments
+                          "#\n")
+                         "# " (make-string 57 ?─) "\n")
+                 'read-only t 'front-sticky t 'rear-nonsticky t)))
+      (local-set-key (kbd "C-c C-c") #'pr-comments--submit-reply)
+      (local-set-key (kbd "C-c C-k") (lambda () (interactive) (quit-window t))))
+    (pop-to-buffer buf)))
+
+(defun pr-comments--reply ()
+  "Compose a reply to the PR review thread at point."
+  (interactive)
+  (let ((thread (pr-comments--thread-at-point)))
+    (unless thread
+      (user-error "pr-comments: No review thread at point"))
+    (pr-comments--open-reply-for-thread thread)))
+
 ;;;; Phase 5 — Entry point
 
 (defun pr-comments--fetch-and-display (git-root)
@@ -366,6 +509,7 @@ Intended as a buffer-local entry in `post-command-hook' for `*pr-comments*'."
                        (when-let ((buf (get-buffer "*pr-comments*")))
                          (with-current-buffer buf
                            (local-set-key (kbd "g")   #'pr-comments-refresh)
+                           (local-set-key (kbd "r")   #'pr-comments--reply)
                            (local-set-key (kbd "SPC") #'pr-comments--show-body-at-point)
                            (add-hook 'post-command-hook
                                      #'pr-comments--auto-update-comment
@@ -388,7 +532,7 @@ Intended as a buffer-local entry in `post-command-hook' for `*pr-comments*'."
   "List unresolved GitHub PR review threads in the *pr-comments* buffer.
 Threads with replies are shown with a [replied] prefix.
 Press RET or click to jump to the file and line of a comment.
-Press g to refresh.
+Press g to refresh.  Press r to reply to the thread at point.
 Press SPC to view the full comment thread in a side window."
   (interactive)
   (pr-comments--fetch-and-display (pr-comments--git-root)))
