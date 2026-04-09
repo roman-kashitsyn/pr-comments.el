@@ -279,9 +279,14 @@ PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
     (insert (format "%s\n" separator))
     (widget-create 'link
                    :notify (lambda (&rest _) (pr-comments--open-reply-for-thread thread))
-                   :help-echo "Reply to this thread"
+                   :help-echo "Reply to this thread (r)"
                    "Reply")
-    (insert (format "  Press q to close\n" ))))
+    (insert "  ")
+    (widget-create 'link
+                   :notify (lambda (&rest _) (pr-comments--do-resolve thread))
+                   :help-echo "Resolve this thread (k)"
+                   "Resolve")
+    (insert "  Press q to close\n")))
 
 (defun pr-comments--thread-for-key (file line)
   "Return the cached thread for FILE at LINE, or nil."
@@ -315,8 +320,10 @@ navigates to a source file)."
         (pr-comments--insert-body thread pr-comments--current-pr))
       (widget-setup)
       (setq buffer-read-only t)
+      (setq pr-comments--comment-thread thread)
       (goto-char (point-min))
-      (local-set-key (kbd "q") #'quit-window))
+      (local-set-key (kbd "q") #'quit-window)
+      (local-set-key (kbd "k") #'pr-comments--resolve))
     (display-buffer buf
                     '(display-buffer-in-side-window
                       (side . bottom)
@@ -336,6 +343,47 @@ Intended as a buffer-local entry in `post-command-hook' for `*pr-comments*'."
   (when (get-buffer-window "*PR Comment*")
     (when-let ((thread (pr-comments--thread-at-point)))
       (pr-comments--display-thread thread))))
+
+;;;; Resolve feature
+
+(defconst pr-comments--resolve-mutation
+  "mutation($threadId:ID!){\
+resolveReviewThread(input:{threadId:$threadId}){\
+thread{isResolved}\
+}\
+}"
+  "GraphQL mutation to resolve a PR review thread.")
+
+(defvar-local pr-comments--comment-thread nil
+  "Thread alist for the thread currently displayed in the *PR Comment* buffer.")
+
+(defun pr-comments--do-resolve (thread)
+  "Confirm and resolve THREAD via the GitHub API, then refresh."
+  (let* ((path    (alist-get 'path thread))
+         (line    (pr-comments--thread-line thread))
+         (prompt  (format "Resolve thread at %s:%s? " path (or line "?"))))
+    (when (yes-or-no-p prompt)
+      (pr-comments--run-gh pr-comments--last-git-root
+                           "api" "graphql"
+                           "-f" (format "threadId=%s" (alist-get 'id thread))
+                           "-f" (format "query=%s" pr-comments--resolve-mutation))
+      (when (get-buffer-window "*PR Comment*")
+        (quit-window nil (get-buffer-window "*PR Comment*")))
+      (message "pr-comments: Thread resolved.")
+      (when pr-comments--last-git-root
+        (pr-comments--fetch-and-display pr-comments--last-git-root)))))
+
+(defun pr-comments--resolve ()
+  "Resolve the PR review thread at point.
+Works from the *pr-comments* list and the *PR Comment* buffer."
+  (interactive)
+  (let ((thread (if (and (boundp 'pr-comments--comment-thread)
+                         pr-comments--comment-thread)
+                    pr-comments--comment-thread
+                  (pr-comments--thread-at-point))))
+    (unless thread
+      (user-error "pr-comments: No review thread at point"))
+    (pr-comments--do-resolve thread)))
 
 ;;;; Reply feature
 
@@ -510,6 +558,7 @@ Queries for an existing pending review first; creates one if none exists."
                          (with-current-buffer buf
                            (local-set-key (kbd "g")   #'pr-comments-refresh)
                            (local-set-key (kbd "r")   #'pr-comments--reply)
+                           (local-set-key (kbd "k")   #'pr-comments--resolve)
                            (local-set-key (kbd "SPC") #'pr-comments--show-body-at-point)
                            (add-hook 'post-command-hook
                                      #'pr-comments--auto-update-comment
