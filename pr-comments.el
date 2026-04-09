@@ -260,13 +260,7 @@ PR-INFO is a plist (:owner OWNER :repo REPO :number NUMBER)."
                          "unknown"))
              (body   (or (alist-get 'body comment) ""))
              (url    (alist-get 'url comment))
-             (indented (replace-regexp-in-string
-                        "^" "  "
-                        (with-temp-buffer
-                          (insert body)
-                          (let ((fill-column 72))
-                            (fill-region (point-min) (point-max)))
-                          (buffer-string)))))
+             (indented (replace-regexp-in-string "^" "  " body)))
         (insert (format "%s:\n%s\n" author indented))
         (when url
           (insert "  ")
@@ -410,7 +404,7 @@ reviews(first:1,states:[PENDING]){nodes{id}}\
 
 (defconst pr-comments--create-pending-review-mutation
   "mutation($prId:ID!){\
-addPullRequestReview(input:{pullRequestId:$prId,event:PENDING}){\
+addPullRequestReview(input:{pullRequestId:$prId}){\
 pullRequestReview{id}\
 }\
 }"
