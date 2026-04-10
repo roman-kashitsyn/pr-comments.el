@@ -1,14 +1,32 @@
 ;;; pr-comments.el --- Browse unresolved GitHub PR review threads via xref -*- lexical-binding: t -*-
-
+;;
+;; Copyright (C) 2026 Roman Kashitsyn
+;;
 ;; Author: Roman Kashitsyn <roman.kashitsyn@gmail.com>
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "28.1"))
-;; Keywords: tools, vc
+;; Keywords: git, tools, vc
+
+;; This file is not part of GNU Emacs
+
+;; This file is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 3, or (at your option)
+;; any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; For a full copy of the GNU General Public License
+;; see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-;; Lists all unresolved GitHub PR review threads in the standard *pr-comments* buffer.
-;; Unreplied threads show [●] in a warning face; replied threads show [✓] dimmed.
-;; Requires the `gh' CLI to be authenticated.
+;;
+;; Lists all unresolved GitHub PR review threads in the *pr-comments* buffer
+;; with the standard xref navigation.
+;; Requires the `gh' cli tool.
 ;;
 ;; Usage: M-x pr-comments
 
