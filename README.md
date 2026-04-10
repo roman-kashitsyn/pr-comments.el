@@ -9,19 +9,19 @@ it allows for addressing code review feedback without switching between the edit
 - The plugin detects the current PR via `gh pr view`.
 - It fetches all review threads using the GitHub GraphQL API.
 - It displays threads as an xref list, sorted by file and line number.
-- Pressing RET on a thread jumps to the comment location in the respository.
-- Pressing SPC on a thread opens a read-only buffer displaying the discussion.
+- Pressing `RET` on a thread jumps to the comment location in the respository.
+- Pressing `SPC` on a thread opens a read-only buffer displaying the discussion.
 - You can reply to or resolve comments from the thread list or the thread view buffer.
 - Replies are posted as **pending review comments** — they remain in draft until you submit the review on GitHub.
 - Replying to or resolving a thread refreshes the thread list.
 
 ## Related projects
 
-- **[code-review](https://github.com/wandersoncferreira/code-review)** is a comprehensive code review package for Emacs with support for GitHub, GitLab, and Bitbucket.
+- [**code-review**](https://github.com/wandersoncferreira/code-review) is a comprehensive code review package for Emacs with support for GitHub, GitLab, and Bitbucket.
   It renders diffs inline and supports submitting full reviews.
   This plugin tries to replace the entire GitHub review interface.
-- **[https://github.com/blahgeek/emacs-pr-review](emacs-pr-review)** is a GitHub-specific PR review interface in Emacs.
-- **[https://github.com/charignon/github-review](github-review)** is a GitHub-specific PR review package that displays the entire review state in a single buffer.
+- [**emacs-pr-review**](https://github.com/blahgeek/emacs-pr-review) is a GitHub-specific PR review interface in Emacs.
+- [**github-review**](https://github.com/charignon/github-review) is a GitHub-specific PR review package that displays the entire review state in a single buffer.
 
 pr-comments.el has a much smaller scope than these projects since it doesn't try to replace GitHub's web interface.
 It focuses solely on minimizing the pain of dealing with unresolved review threads.
@@ -49,10 +49,10 @@ M-x pr-comments
 ```
 
 This opens a `*pr-comments*` buffer listing all unresolved review threads.
-Each entry shows:
+Each entry has an indicator:
 
-- `[●]` (warning face) — thread has no reply yet
-- `[✓]` (dimmed) — thread has at least one reply
+- `[●]` indicates that the thread has no replies yet.
+- `[✓]` indicates that thread has at least one reply.
 
 ## Keybindings
 
@@ -69,6 +69,7 @@ Each entry shows:
 
 ### `*PR Comment*` (single thread view buffer)
 
+| Key   | Action                                      |
 |-------|---------------------------------------------|
 | `r`   | Reply to the thread                         |
 | `k`   | Resolve the thread                          |
