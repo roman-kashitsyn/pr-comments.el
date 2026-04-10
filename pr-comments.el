@@ -7,7 +7,7 @@
 
 ;;; Commentary:
 ;; Lists all unresolved GitHub PR review threads in the standard *pr-comments* buffer.
-;; Threads with replies appear with a [replied] indicator.
+;; Unreplied threads show [●] in a warning face; replied threads show [✓] dimmed.
 ;; Requires the `gh' CLI to be authenticated.
 ;;
 ;; Usage: M-x pr-comments
@@ -25,6 +25,16 @@
   "Browse unresolved GitHub PR review threads via xref."
   :group 'tools
   :prefix "pr-comments-")
+
+(defface pr-comments-unreplied-indicator
+  '((t :inherit warning))
+  "Face for the [●] prefix on unreplied PR review threads."
+  :group 'pr-comments)
+
+(defface pr-comments-replied-indicator
+  '((t :inherit shadow))
+  "Face for the [✓] prefix on replied PR review threads."
+  :group 'pr-comments)
 
 (defcustom pr-comments-gh-executable "gh"
   "Path to the gh CLI executable."
@@ -196,8 +206,11 @@ Handles pagination automatically. Return a flat list of thread alists."
          (body        (if (> (length body) 80)
                           (concat (substring body 0 80) "...")
                         body))
-         (prefix      (if (pr-comments--answered-p thread) "[replied] " "")))
-    (format "%s%s: %s" prefix author body)))
+         (answered (pr-comments--answered-p thread))
+         (prefix   (if answered
+                       (propertize "[✓] " 'face 'pr-comments-replied-indicator)
+                     (propertize "[●] " 'face 'pr-comments-unreplied-indicator))))
+    (concat prefix author ": " body)))
 
 (defun pr-comments--thread-to-xref (thread git-root)
   "Convert THREAD to an xref item rooted at GIT-ROOT.
@@ -573,7 +586,7 @@ Queries for an existing pending review first; creates one if none exists."
 ;;;###autoload
 (defun pr-comments ()
   "List unresolved GitHub PR review threads in the *pr-comments* buffer.
-Threads with replies are shown with a [replied] prefix.
+Unreplied threads show [●] in a warning face; replied threads show [✓] dimmed.
 Press RET or click to jump to the file and line of a comment.
 Press g to refresh.  Press r to reply to the thread at point.
 Press SPC to view the full comment thread in a side window."
