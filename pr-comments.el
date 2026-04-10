@@ -330,6 +330,7 @@ navigates to a source file)."
       (setq pr-comments--comment-thread thread)
       (goto-char (point-min))
       (local-set-key (kbd "q") #'quit-window)
+      (local-set-key (kbd "r") #'pr-comments--reply)
       (local-set-key (kbd "k") #'pr-comments--resolve))
     (display-buffer buf
                     '(display-buffer-in-side-window
@@ -521,9 +522,13 @@ Queries for an existing pending review first; creates one if none exists."
     (pop-to-buffer buf)))
 
 (defun pr-comments--reply ()
-  "Compose a reply to the PR review thread at point."
+  "Compose a reply to the PR review thread at point.
+Works from the *pr-comments* list and the *PR Comment* buffer."
   (interactive)
-  (let ((thread (pr-comments--thread-at-point)))
+  (let ((thread (if (and (boundp 'pr-comments--comment-thread)
+                         pr-comments--comment-thread)
+                    pr-comments--comment-thread
+                  (pr-comments--thread-at-point))))
     (unless thread
       (user-error "pr-comments: No review thread at point"))
     (pr-comments--open-reply-for-thread thread)))
